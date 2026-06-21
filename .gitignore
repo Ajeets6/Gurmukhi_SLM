@@ -4,3 +4,5 @@ skills-lock.json
 __marimo__
 checkpoints/
 tokenizer/spm_train_text.txt
+__pycache__/
+*.log
