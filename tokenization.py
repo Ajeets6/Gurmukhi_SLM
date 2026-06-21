@@ -6,14 +6,30 @@ app = marimo.App()
 
 @app.cell
 def _():
-
+    import os
     from pathlib import Path
 
-    import pandas as pd
-    import sentencepiece as spm
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["RAYON_NUM_THREADS"] = "12"  # set to your physical/logical CPU thread count
+
+    from tokenizers import Tokenizer
+    from tokenizers.models import BPE
+    from tokenizers.normalizers import NFC, Sequence
+    from tokenizers.pre_tokenizers import Metaspace
+    from tokenizers.decoders import Metaspace as MetaspaceDecoder
+    from tokenizers.trainers import BpeTrainer
 
 
-    return Path, pd, spm
+    return (
+        BPE,
+        BpeTrainer,
+        Metaspace,
+        MetaspaceDecoder,
+        NFC,
+        Path,
+        Sequence,
+        Tokenizer,
+    )
 
 
 @app.cell
@@ -36,16 +52,7 @@ def _(Path):
         "<literal>",
         "<natural>",
     ]
-
-    return (
-        DATA_PATH,
-        SPECIAL_TOKENS,
-        TOKENIZER_MODEL_PATH,
-        TOKENIZER_PREFIX,
-        TOKENIZER_TEXT_PATH,
-        TOKENIZER_VOCAB_PATH,
-        VOCAB_SIZE,
-    )
+    return DATA_PATH, TOKENIZER_TEXT_PATH
 
 
 @app.cell
@@ -70,7 +77,6 @@ def _(DATA_PATH, pd):
     cleaned["pa"] = cleaned["pa"].fillna("")
 
     cleaned.shape
-
     return (cleaned,)
 
 
@@ -78,7 +84,6 @@ def _(DATA_PATH, pd):
 def _(cleaned):
 
     cleaned.groupby(["source", "domain"], observed=True).size().reset_index(name="rows")
-
     return
 
 
@@ -120,66 +125,66 @@ def _(TOKENIZER_TEXT_PATH, cleaned, write_sentencepiece_training_text):
     )
 
     spm_training_text
-
     return
 
 
 @app.cell
 def _(
-    SPECIAL_TOKENS,
-    TOKENIZER_MODEL_PATH,
-    TOKENIZER_PREFIX,
-    TOKENIZER_TEXT_PATH,
-    TOKENIZER_VOCAB_PATH,
-    VOCAB_SIZE,
-    spm,
+    BPE,
+    BpeTrainer,
+    Metaspace,
+    MetaspaceDecoder,
+    NFC,
+    Path,
+    Sequence,
+    Tokenizer,
 ):
+    TOKENIZER_DIR = Path("tokenizer")
+    TOKENIZER_TEXT_PATH = TOKENIZER_DIR / "spm_train_text.txt"
+    HF_TOKENIZER_PATH = TOKENIZER_DIR / "hf_bpe24k_tokenizer.json"
 
-    spm.SentencePieceTrainer.train(
-        input=str(TOKENIZER_TEXT_PATH),
-        model_prefix=str(TOKENIZER_PREFIX),
-        vocab_size=VOCAB_SIZE,
-        model_type="bpe",
-        character_coverage=1.0,
-        input_sentence_size=5_000_000,
-        shuffle_input_sentence=True,
-        pad_id=0,
-        unk_id=1,
-        bos_id=2,
-        eos_id=3,
-        user_defined_symbols=SPECIAL_TOKENS,
-        num_threads=8,
+    tokenizer = Tokenizer(BPE(unk_token="<unk>"))
+    tokenizer.normalizer = Sequence([NFC()])
+
+    # SentencePiece-like whitespace handling.
+    tokenizer.pre_tokenizer = Metaspace(replacement="▁", prepend_scheme="always")
+    tokenizer.decoder = MetaspaceDecoder(replacement="▁", prepend_scheme="always")
+
+    trainer = BpeTrainer(
+        vocab_size=24_000,
+        min_frequency=2,
+        show_progress=True,
+        special_tokens=[
+            "<pad>",
+            "<unk>",
+            "<s>",
+            "</s>",
+            "<2en>",
+            "<2pa>",
+            "<legal>",
+            "<general>",
+            "<literal>",
+            "<natural>",
+        ],
     )
 
-    TOKENIZER_MODEL_PATH, TOKENIZER_VOCAB_PATH
+    tokenizer.train(
+        files=[str(TOKENIZER_TEXT_PATH)],
+        trainer=trainer,
+    )
 
-    return
+    tokenizer.save(str(HF_TOKENIZER_PATH))
+    return HF_TOKENIZER_PATH, TOKENIZER_TEXT_PATH
 
 
 @app.cell
-def _(TOKENIZER_MODEL_PATH, pd, spm):
+def _(HF_TOKENIZER_PATH, Tokenizer):
+    hf_tokenizer = Tokenizer.from_file(str(HF_TOKENIZER_PATH))
 
-    sp = spm.SentencePieceProcessor(model_file=str(TOKENIZER_MODEL_PATH))
+    sample = "<2pa> <legal> The agreement shall remain in force for five years."
+    encoded = hf_tokenizer.encode(sample)
 
-    sample_en = "The agreement shall remain in force for five years."
-    sample_pa = "ਇਹ ਸਮਝੌਤਾ ਪੰਜ ਸਾਲਾਂ ਲਈ ਲਾਗੂ ਰਹੇਗਾ।"
-
-    pd.DataFrame(
-        {
-            "text": [sample_en, sample_pa, "<2pa> <legal> " + sample_en],
-            "pieces": [
-                sp.encode(sample_en, out_type=str),
-                sp.encode(sample_pa, out_type=str),
-                sp.encode("<2pa> <legal> " + sample_en, out_type=str),
-            ],
-            "ids": [
-                sp.encode(sample_en, out_type=int),
-                sp.encode(sample_pa, out_type=int),
-                sp.encode("<2pa> <legal> " + sample_en, out_type=int),
-            ],
-        }
-    )
-
+    encoded.tokens, encoded.ids, hf_tokenizer.decode(encoded.ids)
     return
 
 

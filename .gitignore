@@ -2,3 +2,5 @@ datasets
 .agents
 skills-lock.json
 __marimo__
+checkpoints/
+tokenizer/spm_train_text.txt
