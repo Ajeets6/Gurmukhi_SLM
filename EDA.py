@@ -131,11 +131,19 @@ def _(corpus):
 
 @app.cell
 def _(corpus, pd):
+    def _has_gurmukhi(value):
+        return any(0x0A00 <= ord(char) <= 0x0A7F for char in str(value))
+
+
+    def _has_latin(value):
+        return any(("A" <= char <= "Z") or ("a" <= char <= "z") for char in str(value))
+
+
     script_view = corpus.assign(
-        en_has_gurmukhi=corpus["en"].str.contains(r"[\u0A00-\u0A7F]", regex=True),
-        pa_has_gurmukhi=corpus["pa"].str.contains(r"[\u0A00-\u0A7F]", regex=True),
-        pa_has_latin=corpus["pa"].str.contains(r"[A-Za-z]", regex=True),
-        en_has_latin=corpus["en"].str.contains(r"[A-Za-z]", regex=True),
+        en_has_gurmukhi=corpus["en"].map(_has_gurmukhi),
+        pa_has_gurmukhi=corpus["pa"].map(_has_gurmukhi),
+        pa_has_latin=corpus["pa"].map(_has_latin),
+        en_has_latin=corpus["en"].map(_has_latin),
     )
 
     script_flags = pd.DataFrame(
