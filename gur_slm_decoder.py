@@ -1,7 +1,57 @@
 import marimo
 
 __generated_with = "0.23.9"
-app = marimo.App(width="full")
+app = marimo.App(
+    width="full",
+    css_file="/usr/local/_marimo/custom.css",
+    auto_download=["html"],
+)
+
+
+@app.cell
+def _():
+    from huggingface_hub import login
+
+    login()
+    return
+
+
+@app.cell
+def _():
+    from huggingface_hub import snapshot_download
+    repo_id = "Ajaple/gurmukhi-translation-data"
+
+    snapshot_path = snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        local_dir=".",
+        allow_patterns=[
+            "cleaned.tsv.gz",
+            "tokenizer/hf_bpe24k_tokenizer.json",
+        ],
+    )
+
+    snapshot_path
+    return
+
+
+@app.cell
+def _(Path):
+    import gzip
+    import shutil
+
+    Path("datasets").mkdir(exist_ok=True)
+    Path("tokenizer").mkdir(exist_ok=True)
+
+    src = Path("cleaned.tsv.gz")
+    dst = Path("datasets/cleaned.tsv")
+
+    with gzip.open(src, "rb") as f_in:
+        with open(dst, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+
+    dst, dst.stat().st_size
+    return (shutil,)
 
 
 @app.cell
@@ -80,89 +130,13 @@ def _():
 
 
 @app.cell
-def _(mo):
-    mo.md("""
-    <style>
-    .hero {
-        padding: 1.2rem 1.4rem;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #102033 0%, #17324d 52%, #23415f 100%);
-        color: white;
-        margin-bottom: 1rem;
-    }
-    .hero h1 {
-        margin: 0 0 0.35rem 0;
-        font-size: 2rem;
-        letter-spacing: 0;
-    }
-    .hero p {
-        margin: 0;
-        max-width: 980px;
-        color: #d8e6f2;
-        line-height: 1.45;
-    }
-    .cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 0.75rem;
-        margin: 0.75rem 0 1rem 0;
-    }
-    .card {
-        border: 1px solid #d9e2ec;
-        border-radius: 8px;
-        padding: 0.85rem;
-        background: #ffffff;
-    }
-    .card b {
-        display: block;
-        color: #14283d;
-        margin-bottom: 0.25rem;
-    }
-    .card span {
-        color: #4f6478;
-        font-size: 0.92rem;
-    }
-    .ok { color: #18794e; font-weight: 600; }
-    .warn { color: #b26b00; font-weight: 600; }
-    .bad { color: #b42318; font-weight: 600; }
-    .note {
-        border-left: 4px solid #3a6ea5;
-        padding: 0.7rem 0.9rem;
-        background: #f4f8fb;
-        border-radius: 0 8px 8px 0;
-    }
-    </style>
-
-    <div class="hero">
-      <h1>Gurmukhi Decoder-Only SLM Training</h1>
-      <p>
-      A research notebook for pretraining a compact EN &lt;-&gt; Punjabi Gurmukhi
-      decoder-only translation model, then preparing it for teacher refinement
-      and low-bit deployment experiments.
-      </p>
-    </div>
-
-    <div class="cards">
-      <div class="card"><b>Stage 1</b><span>Train a modern causal decoder on the cleaned parallel corpus.</span></div>
-      <div class="card"><b>Stage 2</b><span>Refine with teacher-generated or teacher-scored translations.</span></div>
-      <div class="card"><b>Stage 3</b><span>Run a quantization ladder: 8-bit, 4-bit, 1.58-bit, and true 1-bit.</span></div>
-    </div>
-
-    <div class="note">
-    Research snapshot date: <b>2026-06-23</b>. This notebook intentionally replaces the older planning notes for the decoder-only branch.
-    </div>
-    """)
-    return
-
-
-@app.cell
 def _(Path):
     PROJECT_ROOT = Path.cwd()
     DATA_PATH = PROJECT_ROOT / "datasets" / "cleaned.tsv"
     TOKENIZER_PATH = PROJECT_ROOT / "tokenizer" / "hf_bpe24k_tokenizer.json"
     CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints" / "gur_slm_decoder"
     METRICS_DIR = CHECKPOINT_DIR / "metrics"
-    return CHECKPOINT_DIR, DATA_PATH, METRICS_DIR, TOKENIZER_PATH
+    return CHECKPOINT_DIR, DATA_PATH, METRICS_DIR, PROJECT_ROOT, TOKENIZER_PATH
 
 
 @app.cell
@@ -281,7 +255,7 @@ def _(DataLoader, F, Tokenizer, mo, nn, np, pad_sequence, pd, plt, torch):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, pd):
     research_references = [
         {
@@ -490,7 +464,7 @@ def _(mo, pd):
     return (research_references,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     mo.md("""
     ## Decoder Critique and Changes
@@ -511,286 +485,6 @@ def _(mo):
 
     **Research choice:** start with the full-precision modern decoder, establish clean metrics, then branch into teacher refinement and quantization. 1.58-bit and true 1-bit should be treated as separate low-bit training experiments, not as simple final-file conversions.
     """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        """
-        ## Data and Tokenizer Audit
-
-        Use a sample first. Full-corpus audit on a 1 GB TSV can take a while in a notebook.
-        """
-    )
-
-    audit_sample_rows = mo.ui.number(
-        value=100_000,
-        start=1_024,
-        stop=2_000_000,
-        step=10_000,
-        label="Audit sample rows",
-    )
-    audit_random_sample = mo.ui.checkbox(value=False, label="Randomize after loading sample")
-    run_audit_button = mo.ui.run_button(label="Run data audit")
-
-    mo.hstack([audit_sample_rows, audit_random_sample, run_audit_button])
-    return audit_random_sample, audit_sample_rows, run_audit_button
-
-
-@app.cell
-def _(DATA_PATH, audit_random_sample, audit_sample_rows, pd, run_audit_button):
-    if run_audit_button.value and pd is None:
-        audit_frame = None
-        audit_status = "pandas is not installed in this runtime."
-    elif run_audit_button.value and not DATA_PATH.exists():
-        audit_frame = None
-        audit_status = f"Missing data file: {DATA_PATH}"
-    elif run_audit_button.value:
-        _usecols = [
-            "id",
-            "source",
-            "domain",
-            "en",
-            "pa",
-            "en_chars",
-            "pa_chars",
-            "en_words",
-            "pa_words",
-            "hard_drop",
-            "review_flag",
-        ]
-        audit_frame = pd.read_csv(
-            DATA_PATH,
-            sep="\t",
-            usecols=[col for col in _usecols],
-            dtype={
-                "id": "string",
-                "source": "category",
-                "domain": "category",
-                "en": "string",
-                "pa": "string",
-                "en_chars": "int32",
-                "pa_chars": "int32",
-                "en_words": "int32",
-                "pa_words": "int32",
-                "hard_drop": "boolean",
-                "review_flag": "boolean",
-            },
-            nrows=int(audit_sample_rows.value),
-        )
-        audit_frame["en"] = audit_frame["en"].fillna("")
-        audit_frame["pa"] = audit_frame["pa"].fillna("")
-        if audit_random_sample.value:
-            audit_frame = audit_frame.sample(frac=1.0, random_state=42).reset_index(drop=True)
-        audit_status = f"Loaded {len(audit_frame):,} rows from {DATA_PATH.name}."
-    else:
-        audit_frame = None
-        audit_status = "Audit has not been run yet."
-
-    audit_status
-    return audit_frame, audit_status
-
-
-@app.cell
-def _(audit_frame, audit_status, mo, pd):
-    if audit_frame is None or pd is None:
-        corpus_summary = None
-        domain_source_counts = None
-        quality_summary = None
-        audit_summary_view = mo.md(f"**Audit status:** {audit_status}")
-    else:
-        _length_view = audit_frame.assign(
-            char_ratio=(audit_frame["pa_chars"] / audit_frame["en_chars"].clip(lower=1)).round(2),
-            word_ratio=(audit_frame["pa_words"] / audit_frame["en_words"].clip(lower=1)).round(2),
-        )
-        corpus_summary = _length_view[
-            ["en_chars", "pa_chars", "en_words", "pa_words", "char_ratio", "word_ratio"]
-        ].describe(percentiles=[0.01, 0.05, 0.5, 0.95, 0.99]).round(2)
-
-        domain_source_counts = (
-            audit_frame.groupby(["source", "domain"], observed=True)
-            .size()
-            .reset_index(name="rows")
-            .sort_values("rows", ascending=False)
-        )
-
-        def _has_gurmukhi(value):
-            return any(0x0A00 <= ord(char) <= 0x0A7F for char in str(value))
-
-        def _has_latin(value):
-            return any(("A" <= char <= "Z") or ("a" <= char <= "z") for char in str(value))
-
-        _en_has_gurmukhi = audit_frame["en"].map(_has_gurmukhi)
-        _pa_has_gurmukhi = audit_frame["pa"].map(_has_gurmukhi)
-        _pa_has_latin = audit_frame["pa"].map(_has_latin)
-
-        quality_summary = pd.DataFrame(
-            {
-                "check": [
-                    "rows",
-                    "empty English",
-                    "empty Punjabi",
-                    "English contains Gurmukhi",
-                    "Punjabi has no Gurmukhi",
-                    "Punjabi contains Latin",
-                    "review_flag rows",
-                    "hard_drop rows",
-                ],
-                "rows": [
-                    len(audit_frame),
-                    int((audit_frame["en"].str.strip() == "").sum()),
-                    int((audit_frame["pa"].str.strip() == "").sum()),
-                    int(_en_has_gurmukhi.sum()),
-                    int((~_pa_has_gurmukhi).sum()),
-                    int(_pa_has_latin.sum()),
-                    int(audit_frame["review_flag"].fillna(False).sum()) if "review_flag" in audit_frame else 0,
-                    int(audit_frame["hard_drop"].fillna(False).sum()) if "hard_drop" in audit_frame else 0,
-                ],
-            }
-        )
-
-        audit_summary_view = mo.vstack(
-            [
-                mo.md(f"**Audit status:** {audit_status}"),
-                quality_summary,
-                domain_source_counts.head(20),
-                corpus_summary,
-            ]
-        )
-
-    audit_summary_view
-    return
-
-
-@app.cell
-def _(audit_frame, mo, plt):
-    if audit_frame is None:
-        audit_visual = mo.md("Run the data audit to render corpus visualizations.")
-    elif plt is None:
-        audit_visual = mo.md("matplotlib is not installed, so plots cannot be rendered.")
-    else:
-        _plot_frame = audit_frame.assign(
-            word_ratio=audit_frame["pa_words"] / audit_frame["en_words"].clip(lower=1),
-            en_words_clipped=audit_frame["en_words"].clip(upper=180),
-            pa_words_clipped=audit_frame["pa_words"].clip(upper=180),
-        )
-        _fig, _axes = plt.subplots(2, 2, figsize=(13, 8))
-
-        _source_counts = audit_frame["source"].astype(str).value_counts().sort_values()
-        _source_counts.plot(kind="barh", ax=_axes[0, 0], color="#3a6ea5")
-        _axes[0, 0].set_title("Rows by source")
-        _axes[0, 0].set_xlabel("rows")
-
-        _domain_counts = audit_frame["domain"].astype(str).value_counts().sort_values()
-        _domain_counts.plot(kind="barh", ax=_axes[0, 1], color="#2f9c95")
-        _axes[0, 1].set_title("Rows by domain")
-        _axes[0, 1].set_xlabel("rows")
-
-        _axes[1, 0].hist(
-            [_plot_frame["en_words_clipped"], _plot_frame["pa_words_clipped"]],
-            bins=50,
-            label=["English", "Punjabi"],
-            color=["#3a6ea5", "#bf6f24"],
-            alpha=0.72,
-        )
-        _axes[1, 0].set_title("Sentence length distribution, clipped at 180 words")
-        _axes[1, 0].set_xlabel("words")
-        _axes[1, 0].set_ylabel("rows")
-        _axes[1, 0].legend()
-
-        _axes[1, 1].hist(_plot_frame["word_ratio"].clip(upper=4), bins=60, color="#7b5ea7", alpha=0.82)
-        _axes[1, 1].set_title("Punjabi / English word ratio, clipped at 4")
-        _axes[1, 1].set_xlabel("word ratio")
-        _axes[1, 1].set_ylabel("rows")
-
-        _fig.tight_layout()
-        audit_visual = _fig
-
-    audit_visual
-    return
-
-
-@app.cell
-def _(TOKENIZER_PATH, Tokenizer, audit_frame, mo, pd, tokenizer_meta):
-    if Tokenizer is None:
-        hf_tokenizer = None
-        tokenizer_status = "tokenizers is not installed; only JSON metadata is available."
-        tokenizer_length_frame = None
-        tokenizer_stats_frame = None
-    elif not TOKENIZER_PATH.exists():
-        hf_tokenizer = None
-        tokenizer_status = f"Missing tokenizer file: {TOKENIZER_PATH}"
-        tokenizer_length_frame = None
-        tokenizer_stats_frame = None
-    else:
-        hf_tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
-        tokenizer_status = (
-            f"Loaded tokenizer with {hf_tokenizer.get_vocab_size():,} tokens. "
-            f"Special IDs: {tokenizer_meta['special_tokens']}"
-        )
-
-        if audit_frame is not None and pd is not None:
-            _sample = audit_frame.head(min(20_000, len(audit_frame))).copy()
-            _sample["en_tokens"] = _sample["en"].map(lambda text: len(hf_tokenizer.encode(str(text)).ids))
-            _sample["pa_tokens"] = _sample["pa"].map(lambda text: len(hf_tokenizer.encode(str(text)).ids))
-            _sample["en_tokens_per_word"] = _sample["en_tokens"] / _sample["en_words"].clip(lower=1)
-            _sample["pa_tokens_per_word"] = _sample["pa_tokens"] / _sample["pa_words"].clip(lower=1)
-            tokenizer_length_frame = _sample[
-                ["source", "domain", "en_words", "pa_words", "en_tokens", "pa_tokens", "en_tokens_per_word", "pa_tokens_per_word"]
-            ]
-            tokenizer_stats_frame = tokenizer_length_frame[
-                ["en_tokens", "pa_tokens", "en_tokens_per_word", "pa_tokens_per_word"]
-            ].describe(percentiles=[0.05, 0.5, 0.95, 0.99]).round(2)
-        else:
-            tokenizer_length_frame = None
-            tokenizer_stats_frame = None
-
-    mo.md(f"## Tokenizer Audit\n\n{tokenizer_status}")
-    tokenizer_stats_frame if tokenizer_stats_frame is not None else tokenizer_meta
-    return (tokenizer_length_frame,)
-
-
-@app.cell
-def _(mo, plt, tokenizer_length_frame):
-    if tokenizer_length_frame is None:
-        tokenizer_visual = mo.md("Run the data audit with `tokenizers` installed to render token-length plots.")
-    elif plt is None:
-        tokenizer_visual = mo.md("matplotlib is not installed, so tokenizer plots cannot be rendered.")
-    else:
-        _fig, _axes = plt.subplots(1, 2, figsize=(13, 4.5))
-        _axes[0].hist(
-            [
-                tokenizer_length_frame["en_tokens"].clip(upper=320),
-                tokenizer_length_frame["pa_tokens"].clip(upper=320),
-            ],
-            bins=50,
-            color=["#3a6ea5", "#bf6f24"],
-            label=["English", "Punjabi"],
-            alpha=0.75,
-        )
-        _axes[0].set_title("Token lengths, clipped at 320")
-        _axes[0].set_xlabel("tokens")
-        _axes[0].set_ylabel("rows")
-        _axes[0].legend()
-
-        _axes[1].hist(
-            [
-                tokenizer_length_frame["en_tokens_per_word"].clip(upper=5),
-                tokenizer_length_frame["pa_tokens_per_word"].clip(upper=5),
-            ],
-            bins=50,
-            color=["#3a6ea5", "#bf6f24"],
-            label=["English", "Punjabi"],
-            alpha=0.75,
-        )
-        _axes[1].set_title("Tokens per word, clipped at 5")
-        _axes[1].set_xlabel("tokens per word")
-        _axes[1].legend()
-        _fig.tight_layout()
-        tokenizer_visual = _fig
-
-    tokenizer_visual
     return
 
 
@@ -855,7 +549,7 @@ def _(dataclass):
     return DecoderTrainConfig, MODEL_PROFILES
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(F, math, nn, torch, torch_checkpoint):
     RMSNorm = None
     RotaryEmbedding = None
@@ -1057,7 +751,7 @@ def _(F, math, nn, torch, torch_checkpoint):
     return (ModernDecoderOnlyTransformer,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(Dataset, pad_sequence, pd, torch):
     CausalTranslationDataset = None
     CausalCollator = None
@@ -1176,7 +870,7 @@ def _(Dataset, pad_sequence, pd, torch):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(math, nullcontext, torch):
     def set_seed(seed: int) -> None:
         random_state = seed
@@ -1259,7 +953,7 @@ def _(math, nullcontext, torch):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(F, amp_dtype, autocast_context, torch):
     def train_one_epoch(
         model,
@@ -1375,7 +1069,7 @@ def _(F, amp_dtype, autocast_context, torch):
     return evaluate_model, train_one_epoch
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(torch):
     @torch.no_grad() if torch is not None else (lambda fn: fn)
     def generate_translation(
@@ -1443,7 +1137,7 @@ def _(MODEL_PROFILES, mo):
         value="<natural>",
         label="Style tag",
     )
-    train_batch_size = mo.ui.number(value=192, start=1, stop=1024, step=1, label="Batch size")
+    train_batch_size = mo.ui.number(value=32, start=1, stop=512, step=1, label="Batch size")
     train_epochs = mo.ui.number(value=1, start=1, stop=100, step=1, label="Epochs")
     train_max_rows = mo.ui.number(value=0, start=0, stop=2_000_000, step=10_000, label="Max rows; 0 = full corpus")
     train_max_steps = mo.ui.number(value=0, start=0, stop=1_000_000, step=100, label="Max steps/epoch; 0 = full epoch")
@@ -1565,10 +1259,15 @@ def _(mo):
             mo.hstack([resume_training, resume_checkpoint_path]),
         ]
     )
-    return dry_run_train_button, full_train_button, resume_checkpoint_path, resume_training
+    return (
+        dry_run_train_button,
+        full_train_button,
+        resume_checkpoint_path,
+        resume_training,
+    )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     CHECKPOINT_DIR,
     CausalCollator,
@@ -1578,6 +1277,8 @@ def _(
     DecoderTrainConfig,
     METRICS_DIR,
     ModernDecoderOnlyTransformer,
+    PROJECT_ROOT,
+    Path,
     TOKENIZER_PATH,
     Tokenizer,
     amp_dtype,
@@ -1625,20 +1326,44 @@ def _(
             _missing.append("pandas")
         if Tokenizer is None:
             _missing.append("tokenizers")
-        if DataLoader is None or CausalTranslationDataset is None or ModernDecoderOnlyTransformer is None:
+        if (
+            DataLoader is None
+            or CausalTranslationDataset is None
+            or ModernDecoderOnlyTransformer is None
+        ):
             _missing.append("model/data classes")
         if _missing:
-            training_report = {"status": f"missing dependencies: {', '.join(_missing)}"}
+            training_report = {
+                "status": f"missing dependencies: {', '.join(_missing)}"
+            }
         elif not DATA_PATH.exists() or not TOKENIZER_PATH.exists():
             training_report = {"status": "missing data or tokenizer artifact"}
         else:
             set_seed(selected_train_config.seed)
-            if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
+            if torch.cuda.is_available() and hasattr(
+                torch, "set_float32_matmul_precision"
+            ):
                 torch.set_float32_matmul_precision("high")
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-            row_limit = 4096 if dry_run_train_button.value else (int(train_max_rows.value) if int(train_max_rows.value) > 0 else None)
-            max_steps_value = 2 if dry_run_train_button.value else (int(train_max_steps.value) if int(train_max_steps.value) > 0 else None)
+            row_limit = (
+                4096
+                if dry_run_train_button.value
+                else (
+                    int(train_max_rows.value)
+                    if int(train_max_rows.value) > 0
+                    else None
+                )
+            )
+            max_steps_value = (
+                2
+                if dry_run_train_button.value
+                else (
+                    int(train_max_steps.value)
+                    if int(train_max_steps.value) > 0
+                    else None
+                )
+            )
 
             tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
             pad_id = tokenizer.token_to_id("<pad>")
@@ -1652,8 +1377,12 @@ def _(
                 profile=selected_train_config.profile,
                 max_seq_len=selected_train_config.max_seq_len,
                 min_target_tokens=selected_train_config.min_target_tokens,
-                batch_size=4 if dry_run_train_button.value else selected_train_config.batch_size,
-                epochs=1 if dry_run_train_button.value else selected_train_config.epochs,
+                batch_size=4
+                if dry_run_train_button.value
+                else selected_train_config.batch_size,
+                epochs=1
+                if dry_run_train_button.value
+                else selected_train_config.epochs,
                 lr=selected_train_config.lr,
                 weight_decay=selected_train_config.weight_decay,
                 grad_accum_steps=selected_train_config.grad_accum_steps,
@@ -1735,15 +1464,20 @@ def _(
             )
             if max_steps_value is not None:
                 total_steps = min(total_steps, max_steps_value * config.epochs)
-            scheduler = make_cosine_scheduler(optimizer, config.warmup_steps, total_steps, config.min_lr_ratio)
+            scheduler = make_cosine_scheduler(
+                optimizer, config.warmup_steps, total_steps, config.min_lr_ratio
+            )
             dtype = amp_dtype(device, config.amp)
-            scaler = make_grad_scaler(use_fp16=(device.type == "cuda" and dtype == torch.float16))
-
+            scaler = make_grad_scaler(
+                use_fp16=(device.type == "cuda" and dtype == torch.float16)
+            )
             resume_epoch = 0
             best_val_loss = float("inf")
             global_step = 0
             if bool(resume_training.value) and not dry_run_train_button.value:
-                checkpoint_path = (TOKENIZER_PATH.parent.parent / resume_checkpoint_path.value).expanduser()
+                checkpoint_path = Path(resume_checkpoint_path.value).expanduser()
+                if not checkpoint_path.is_absolute():
+                    checkpoint_path = PROJECT_ROOT / checkpoint_path
                 checkpoint = torch.load(checkpoint_path, map_location=device)
                 model.load_state_dict(checkpoint["model"])
                 optimizer.load_state_dict(checkpoint["optimizer"])
@@ -1756,10 +1490,8 @@ def _(
                     f"resumed from {checkpoint_path} "
                     f"at saved_epoch={resume_epoch} best_val_loss={best_val_loss:.4f}"
                 )
-
             if bool(train_compile.value) and hasattr(torch, "compile"):
                 model = torch.compile(model)
-
             CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
             METRICS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1767,12 +1499,15 @@ def _(
             print(f"amp: {config.amp}")
             print(f"profile: {config.profile}")
             print(f"vocab_size: {vocab_size:,}")
-            print(f"parameters: {parameter_count(model):,} ({format_count(parameter_count(model))})")
-            print(f"train examples including both directions: {len(train_dataset):,}")
+            print(
+                f"parameters: {parameter_count(model):,} ({format_count(parameter_count(model))})"
+            )
+            print(
+                f"train examples including both directions: {len(train_dataset):,}"
+            )
             print(f"val examples including both directions: {len(val_dataset):,}")
             print(f"train batches per epoch: {len(train_loader):,}")
             print(f"loader_workers: {loader_workers}")
-
             history_records = []
             started_at = time.time()
             start_epoch = resume_epoch + 1
@@ -1795,7 +1530,9 @@ def _(
                     start_global_step=global_step,
                     log_every=25 if dry_run_train_button.value else 100,
                 )
-                val_loss, val_acc = evaluate_model(model, val_loader, device, config.amp)
+                val_loss, val_acc = evaluate_model(
+                    model, val_loader, device, config.amp
+                )
                 epoch_record = {
                     "epoch": epoch,
                     "global_step": global_step,
@@ -1809,7 +1546,9 @@ def _(
                 history_records.extend(train_records)
                 history_records.append(epoch_record)
 
-                model_for_save = model._orig_mod if hasattr(model, "_orig_mod") else model
+                model_for_save = (
+                    model._orig_mod if hasattr(model, "_orig_mod") else model
+                )
                 payload = {
                     "epoch": epoch,
                     "model": model_for_save.state_dict(),
@@ -1852,7 +1591,9 @@ def _(
             metrics_path = METRICS_DIR / f"{config.profile}_history.csv"
             training_history_frame.to_csv(metrics_path, index=False)
 
-            trained_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+            trained_model = (
+                model._orig_mod if hasattr(model, "_orig_mod") else model
+            )
             trained_tokenizer = tokenizer
             trained_config = config
             training_report = {
@@ -1868,12 +1609,7 @@ def _(
 
     mo.md(f"**Training status:** {training_report['status']}")
     training_report
-    return (
-        trained_config,
-        trained_model,
-        trained_tokenizer,
-        training_history_frame,
-    )
+    return (training_history_frame,)
 
 
 @app.cell
@@ -1915,75 +1651,113 @@ def _(mo, plt, training_history_frame):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
-    mo.md("## Quick Generation Check")
-    sample_text = mo.ui.text_area(
-        value="The agreement shall remain in force for five years.",
-        label="Source text",
-        rows=3,
-    )
-    sample_target_lang = mo.ui.dropdown(options=["pa", "en"], value="pa", label="Target language")
-    sample_domain = mo.ui.dropdown(options=["legal", "general"], value="legal", label="Domain")
-    sample_style = mo.ui.dropdown(options=["<natural>", "<literal>"], value="<natural>", label="Style")
-    sample_temperature = mo.ui.number(value=0.0, start=0.0, stop=1.5, step=0.1, label="Temperature; 0 = greedy")
-    sample_button = mo.ui.run_button(label="Generate sample")
 
-    mo.vstack(
-        [
-            sample_text,
-            mo.hstack([sample_target_lang, sample_domain, sample_style, sample_temperature, sample_button]),
-        ]
+    checkpoin_path = "/marimo/checkpoints/gur_slm_decoder/base_best.pt"
+
+    # UI elements for translation test
+    test_source_text_input = mo.ui.text_area(
+        value=" Translate only this <2pa> <legal> <natural>: The agreement shall remain in force for five years.",
+        label="Test Source Text",
+        rows=3
     )
+    submit_button = mo.ui.run_button(label="Translate")
+
+    test_target_lang = "pa"  # "pa" or "en"
+    test_domain = "legal"   # "legal" or "general"
+    test_style_tag = "<natural>"
+
+    # Display the UI elements
+    mo.md("## Checkpoint Translation Test")
+    mo.vstack([
+        test_source_text_input,
+        mo.hstack([submit_button]),
+    ])
+
     return (
-        sample_button,
-        sample_domain,
-        sample_style,
-        sample_target_lang,
-        sample_temperature,
-        sample_text,
+        checkpoin_path,
+        submit_button,
+        test_domain,
+        test_source_text_input,
+        test_style_tag,
+        test_target_lang,
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
+    ModernDecoderOnlyTransformer,
+    TOKENIZER_PATH,
+    Tokenizer,
+    checkpoin_path,
     generate_translation,
     mo,
-    sample_button,
-    sample_domain,
-    sample_style,
-    sample_target_lang,
-    sample_temperature,
-    sample_text,
+    submit_button,
+    test_domain,
+    test_source_text_input,
+    test_style_tag,
+    test_target_lang,
     torch,
-    trained_config,
-    trained_model,
-    trained_tokenizer,
 ):
-    if not sample_button.value:
-        sample_output = mo.md("Train or load a model, then run a sample.")
-    elif trained_model is None or trained_tokenizer is None or torch is None:
-        sample_output = mo.md("No trained model is available in this notebook state.")
-    else:
-        _device = next(trained_model.parameters()).device
-        _translation = generate_translation(
-            trained_model,
-            trained_tokenizer,
-            sample_text.value,
-            target_lang=sample_target_lang.value,
-            domain=sample_domain.value,
-            style_tag=sample_style.value,
-            device=_device,
-            max_seq_len=trained_config.max_seq_len,
-            temperature=float(sample_temperature.value),
-        )
-        sample_output = mo.md(f"**Output:**\n\n{_translation}")
 
-    sample_output
+    # Process translation when submit button is clicked
+    if submit_button.value:
+        _load_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _loaded_checkpoint = torch.load(checkpoin_path, map_location=_load_device)
+        _loaded_config = _loaded_checkpoint["config"]
+
+        loaded_decoder_tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
+
+        loaded_decoder_model = ModernDecoderOnlyTransformer(
+            vocab_size=int(_loaded_checkpoint.get("vocab_size", _loaded_config["vocab_size"])),
+            pad_id=int(_loaded_config["pad_id"]),
+            d_model=int(_loaded_config["d_model"]),
+            nhead=int(_loaded_config["nhead"]),
+            num_layers=int(_loaded_config["num_layers"]),
+            dim_feedforward=int(_loaded_config["dim_feedforward"]),
+            dropout=0.0,
+            max_seq_len=int(_loaded_config["max_seq_len"]),
+            rope_base=float(_loaded_config.get("rope_base", 10000.0)),
+            gradient_checkpointing=False,
+        ).to(_load_device)
+
+        loaded_decoder_model.load_state_dict(_loaded_checkpoint["model"])
+        loaded_decoder_model.eval()
+
+        loaded_translation = generate_translation(
+            loaded_decoder_model,
+            loaded_decoder_tokenizer,
+            test_source_text_input.value,
+            target_lang=test_target_lang,
+            domain=test_domain,
+            style_tag=test_style_tag,
+            device=_load_device,
+            max_seq_len=int(_loaded_config["max_seq_len"]),
+            max_new_tokens=96,
+            temperature=0.0,
+        )
+    else:
+        loaded_translation = "Click 'Translate' to generate output"
+
+    mo.md(
+        f"""
+        **Checkpoint:** `{checkpoin_path}`
+
+        **Input:** {test_source_text_input.value}
+
+        **Output:** {loaded_translation}
+        """
+    )
     return
 
 
 @app.cell
+def _():
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.md("""
     ## New Research Plan
@@ -2044,6 +1818,110 @@ def _(CHECKPOINT_DIR, mo):
     mo.md("## Checkpoint Inventory")
     checkpoint_files = sorted(CHECKPOINT_DIR.glob("**/*.pt")) if CHECKPOINT_DIR.exists() else []
     checkpoint_files[-20:]
+    return
+
+
+@app.cell
+def _(Path, TOKENIZER_PATH, json, shutil, torch):
+
+    try:
+        from huggingface_hub import HfApi, create_repo
+    except ModuleNotFoundError:
+        raise ModuleNotFoundError(
+            "Install huggingface_hub first: pip install -U huggingface_hub"
+        )
+
+    HF_REPO_ID = "Ajaple/gur-slm-decoder-base"  # change this
+    HF_PRIVATE = True  # set False if you want it public
+
+    checkpoit_path = Path("/marimo/checkpoints/gur_slm_decoder/base_best.pt")
+    upload_dir = Path("/marimo/hf_upload_gur_slm_decoder")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    checkpoit = torch.load(checkpoit_path, map_location="cpu")
+    confi = checkpoit.get("config", {})
+
+    # Copy model checkpoint.
+    shutil.copy2(checkpoit_path, upload_dir / "base_best.pt")
+
+    # Copy tokenizer.
+    shutil.copy2(TOKENIZER_PATH, upload_dir / "hf_bpe24k_tokenizer.json")
+
+    # Save config separately for easy loading later.
+    with (upload_dir / "decoder_config.json").open("w", encoding="utf-8") as f:
+        json.dump(confi, f, indent=2, ensure_ascii=False)
+
+    # Small model card.
+    readme = f"""---
+    language:
+    - pa
+    - en
+    license: other
+    tags:
+    - translation
+    - punjabi
+    - gurmukhi
+    - decoder-only
+    - pytorch
+    ---
+
+    # Gurmukhi SLM Decoder Checkpoint
+
+    This repository stores a custom PyTorch decoder-only EN <-> Punjabi Gurmukhi translation checkpoint.
+
+    ## Files
+
+    - `base_best.pt`: best PyTorch checkpoint with model, optimizer, scheduler, config, and validation loss.
+    - `decoder_config.json`: extracted model/training config.
+    - `hf_bpe24k_tokenizer.json`: Hugging Face Tokenizers BPE tokenizer.
+
+    ## Validation
+
+    Best validation loss from checkpoint: `{checkpoit.get("val_loss", "unknown")}`
+
+    ## Loading
+
+    Use the project notebook/model class `ModernDecoderOnlyTransformer` and load:
+
+    ```python
+    checkpoint = torch.load("base_best.pt", map_location=device)
+    model.load_state_dict(checkpoint["model"])
+    This is not yet a standard transformers model format.
+    """
+    with (upload_dir / "README.md").open("w", encoding="utf-8") as f:
+        f.write(readme)
+    return HF_PRIVATE, HF_REPO_ID, HfApi, create_repo, upload_dir
+
+
+@app.cell
+def _(HF_PRIVATE, HF_REPO_ID, HfApi, create_repo, mo, upload_dir):
+
+    create_repo(
+        repo_id=HF_REPO_ID,
+        repo_type="model",
+        private=HF_PRIVATE,
+        exist_ok=True,
+    )
+    api = HfApi()
+    api.upload_folder(
+        folder_path=str(upload_dir),
+        repo_id=HF_REPO_ID,
+        repo_type="model",
+        commit_message="Upload Gurmukhi decoder base_best checkpoint",
+    )
+    mo.md(
+        f"""
+        ## Uploaded to Hugging Face
+    Repo: https://huggingface.co/{HF_REPO_ID}
+
+    Uploaded files from: `{upload_dir}`
+    """
+    )
+    return
+
+
+@app.cell
+def _():
     return
 
 
