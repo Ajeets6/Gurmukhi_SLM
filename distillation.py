@@ -120,7 +120,6 @@ def _(mo):
         padding: 1.15rem 1.35rem;
         border-radius: 8px;
         color: white;
-        background: linear-gradient(135deg, #102033 0%, #17324d 50%, #254766 100%);
         margin-bottom: 1rem;
     }
     .hero h1 { margin: 0 0 0.3rem 0; font-size: 1.95rem; letter-spacing: 0; }
@@ -259,6 +258,61 @@ def _(mo):
     notebook filters teacher targets with script checks, length-ratio checks,
     and optional chrF/BLEU diagnostics before using them for training.
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def distillation_architecture(mo, pd):
+    distillation_architecture_frame = pd.DataFrame(
+        [
+            {
+                "MiniLLM component": "Reverse KL objective",
+                "Notebook implementation": "Sequence-level surrogate: student samples are scored by Sarvam with KL-style reward `log p_student - log p_teacher`.",
+                "Status": "Adapted for tokenizer mismatch",
+            },
+            {
+                "MiniLLM component": "On-policy student sampling",
+                "Notebook implementation": "The RKL demo samples from the current 58M decoder before scoring with Sarvam.",
+                "Status": "Implemented as small-batch extension",
+            },
+            {
+                "MiniLLM component": "Teacher/student same token space",
+                "Notebook implementation": "Sarvam and the from-scratch decoder do not share a tokenizer, so the main scalable run uses sequence KD on accepted teacher translations.",
+                "Status": "Explicitly not token-level RKL",
+            },
+            {
+                "MiniLLM component": "Stable distillation baseline",
+                "Notebook implementation": "SeqKD and mixed gold+teacher CE fine-tune the student after teacher quality gates.",
+                "Status": "Primary training path",
+            },
+            {
+                "MiniLLM component": "Evaluation against the starting student",
+                "Notebook implementation": "Baseline, Sarvam teacher, and post-distillation outputs are compared with BLEU, chrF, script errors, English leakage, and challenge examples.",
+                "Status": "Reader-facing result path",
+            },
+        ]
+    ) if pd is not None else None
+
+    if distillation_architecture_frame is None:
+        distillation_architecture_view = mo.md("pandas is required to show the distillation architecture table.")
+    else:
+        distillation_architecture_view = mo.vstack(
+            [
+                mo.md(
+                    """
+                    ## Distillation Architecture
+
+                    This notebook mirrors MiniLLM at the **generative objective level**:
+                    use on-policy student samples and a reverse-KL-style teacher score.
+                    Because Sarvam and the 58M decoder use different tokenizers, the
+                    scalable training path is intentionally sequence-level KD first,
+                    then a small MiniLLM-style RKL extension.
+                    """
+                ),
+                distillation_architecture_frame,
+            ]
+        )
+    distillation_architecture_view
     return
 
 
@@ -792,6 +846,10 @@ def flores_gate_md(mo):
     The dataset is gated on Hugging Face and is intended for evaluation, not
     training. Use `dev` for notebook debugging and `devtest` for final paper
     tables after accepting the dataset terms.
+
+    If `datasets.load_dataset` fails with a multiprocessing/RLock error, this
+    notebook falls back to direct gated JSONL downloads through
+    `huggingface_hub`: `{split}/eng_Latn.jsonl` and `{split}/pan_Guru.jsonl`.
     """)
     return
 
@@ -828,6 +886,7 @@ def flores_controls(mo):
 def flores_loader(
     flores_sample_rows_input,
     flores_split_input,
+    hf_hub_download,
     load_dataset,
     load_flores_button,
     mo,
@@ -836,18 +895,55 @@ def flores_loader(
     flores_pa_benchmark = None
     flores_report = {"status": "not loaded"}
 
+    def _normalize_flores_frame(frame, lang_code):
+        _frame = frame.copy()
+        if "text" not in _frame.columns:
+            _candidate_cols = [
+                _col for _col in ["sentence", "raw_text", "content"] if _col in _frame.columns
+            ]
+            if not _candidate_cols:
+                raise ValueError(f"No text column found for {lang_code}; columns={list(_frame.columns)}")
+            _frame = _frame.rename(columns={_candidate_cols[0]: "text"})
+        if "id" not in _frame.columns:
+            _frame["id"] = range(len(_frame))
+        if "domain" not in _frame.columns:
+            _frame["domain"] = "flores+"
+        if "topic" not in _frame.columns:
+            _frame["topic"] = "unknown"
+        return _frame[["id", "text", "domain", "topic"]]
+
+
+    def _load_flores_lang(split, lang_code):
+        _datasets_error = None
+        if load_dataset is not None:
+            try:
+                _dataset = load_dataset("openlanguagedata/flores_plus", lang_code, split=split)
+                return _normalize_flores_frame(_dataset.to_pandas(), lang_code), "datasets.load_dataset"
+            except Exception as _exc:
+                _datasets_error = _exc
+        if hf_hub_download is None:
+            raise RuntimeError(f"datasets loader failed and huggingface_hub is unavailable: {_datasets_error}")
+        _path = hf_hub_download(
+            repo_id="openlanguagedata/flores_plus",
+            filename=f"{split}/{lang_code}.jsonl",
+            repo_type="dataset",
+        )
+        _note = "jsonl fallback"
+        if _datasets_error is not None:
+            _note += f" after datasets error: {_datasets_error}"
+        return _normalize_flores_frame(pd.read_json(_path, lines=True), lang_code), _note
+
+
     if load_flores_button.value:
-        if load_dataset is None or pd is None:
-            flores_report = {"status": "missing Hugging Face datasets or pandas"}
+        if pd is None:
+            flores_report = {"status": "missing pandas"}
         else:
             try:
                 _split = flores_split_input.value
-                _eng = load_dataset("openlanguagedata/flores_plus", "eng_Latn", split=_split)
-                _pan = load_dataset("openlanguagedata/flores_plus", "pan_Guru", split=_split)
-                _eng_df = _eng.to_pandas()[["id", "text", "domain", "topic"]].rename(
-                    columns={"text": "source"}
-                )
-                _pan_df = _pan.to_pandas()[["id", "text"]].rename(columns={"text": "reference"})
+                _eng_df, _eng_loader = _load_flores_lang(_split, "eng_Latn")
+                _pan_df, _pan_loader = _load_flores_lang(_split, "pan_Guru")
+                _eng_df = _eng_df.rename(columns={"text": "source"})
+                _pan_df = _pan_df[["id", "text"]].rename(columns={"text": "reference"})
                 _merged = _eng_df.merge(_pan_df, on="id", how="inner")
                 _merged = _merged.head(int(flores_sample_rows_input.value)).copy()
                 _merged["id"] = "flores:" + _merged["id"].astype(str)
@@ -856,7 +952,13 @@ def flores_loader(
                 flores_pa_benchmark = _merged[
                     ["id", "direction", "domain", "source", "reference", "phenomenon", "topic"]
                 ]
-                flores_report = {"status": "loaded", "split": _split, "rows": len(flores_pa_benchmark)}
+                flores_report = {
+                    "status": "loaded",
+                    "split": _split,
+                    "rows": len(flores_pa_benchmark),
+                    "eng_loader": _eng_loader,
+                    "pan_loader": _pan_loader,
+                }
             except Exception as _exc:
                 flores_report = {"status": f"FLORES+ load failed: {_exc}"}
 
@@ -1407,7 +1509,7 @@ def cloud_flores10_sanity(mo, pd):
             ]
         )
     cloud_flores10_score_view
-    return
+    return (cloud_flores10_score_frame,)
 
 
 @app.cell(hide_code=True)
@@ -1780,6 +1882,156 @@ def _(distillation_history_frame, mo, plt):
         _fig.tight_layout()
         distill_plot = _fig
     distill_plot
+    return
+
+
+@app.cell(hide_code=True)
+def post_distillation_eval_intro(mo):
+    mo.md("""
+    ## Post-Distillation Evaluation
+
+    A reader should not have to infer whether distillation helped. After training,
+    run this section to generate outputs from `student_distilled_last.pt` on the
+    same cache used for baseline and teacher comparison. The result table reports
+    absolute scores and deltas against `base_best`.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def post_distillation_eval_controls(mo):
+    evaluate_distilled_button = mo.ui.run_button(label="Evaluate distilled checkpoint")
+    distilled_eval_rows = mo.ui.number(value=100, start=1, stop=20_000, step=10, label="Evaluation rows")
+    mo.hstack([evaluate_distilled_button, distilled_eval_rows])
+    return distilled_eval_rows, evaluate_distilled_button
+
+
+@app.cell(hide_code=True)
+def post_distillation_eval(
+    DISTILLED_DIR,
+    base_model_available,
+    base_tokenizer_path,
+    compute_mt_metrics,
+    distilled_eval_rows,
+    evaluate_distilled_button,
+    generate_student_translation,
+    load_student_checkpoint,
+    mo,
+    pd,
+    teacher_cache_frame,
+    torch,
+):
+    distilled_eval_frame = None
+    distilled_metric_frame = None
+    distilled_eval_report = {"status": "not run"}
+    _distilled_checkpoint_path = DISTILLED_DIR / "student_distilled_last.pt"
+
+    if evaluate_distilled_button.value:
+        if teacher_cache_frame is None or pd is None:
+            distilled_eval_report = {"status": "missing teacher cache"}
+        elif not _distilled_checkpoint_path.exists():
+            distilled_eval_report = {"status": f"missing checkpoint: {_distilled_checkpoint_path}"}
+        elif not base_model_available:
+            distilled_eval_report = {"status": "missing base tokenizer/checkpoint context"}
+        elif torch is None:
+            distilled_eval_report = {"status": "missing torch"}
+        else:
+            _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            _model, _tokenizer, _cfg, _checkpoint = load_student_checkpoint(
+                _distilled_checkpoint_path,
+                base_tokenizer_path,
+                device=_device,
+                dropout=0.0,
+            )
+            _rows = teacher_cache_frame.head(int(distilled_eval_rows.value)).copy().reset_index(drop=True)
+            _distilled_outputs = []
+            for _row in _rows.itertuples(index=False):
+                _target_lang = "pa" if _row.direction == "en-pa" else "en"
+                _distilled_outputs.append(
+                    generate_student_translation(
+                        _model,
+                        _tokenizer,
+                        _row.source,
+                        target_lang=_target_lang,
+                        domain=_row.domain,
+                        style_tag="<natural>",
+                        device=_device,
+                        max_seq_len=int(_cfg["max_seq_len"]),
+                        max_new_tokens=96,
+                        temperature=0.0,
+                    )
+                )
+            _rows["distilled_output"] = _distilled_outputs
+            _systems = ["baseline_output"]
+            if "teacher_output" in _rows.columns and _rows["teacher_output"].astype(str).str.strip().ne("").any():
+                _systems.append("teacher_output")
+            _systems.append("distilled_output")
+            distilled_metric_frame = pd.DataFrame([compute_mt_metrics(_rows, _system) for _system in _systems])
+            _baseline = distilled_metric_frame[distilled_metric_frame["system"].eq("baseline_output")]
+            if len(_baseline) == 1:
+                _base_bleu = _baseline["bleu"].iloc[0]
+                _base_chrf = _baseline["chrf"].iloc[0]
+                distilled_metric_frame["delta_bleu_vs_base"] = distilled_metric_frame["bleu"].apply(
+                    lambda _score: None if _score is None or _base_bleu is None else _score - _base_bleu
+                )
+                distilled_metric_frame["delta_chrf_vs_base"] = distilled_metric_frame["chrf"].apply(
+                    lambda _score: None if _score is None or _base_chrf is None else _score - _base_chrf
+                )
+            distilled_eval_frame = _rows
+            _metrics_dir = DISTILLED_DIR.parent / "metrics"
+            _metrics_dir.mkdir(parents=True, exist_ok=True)
+            _rows.to_csv(_metrics_dir / "distilled_eval_outputs.csv", index=False)
+            distilled_metric_frame.to_csv(_metrics_dir / "distilled_eval_metrics.csv", index=False)
+            distilled_eval_report = {
+                "status": "complete",
+                "rows": len(_rows),
+                "checkpoint": str(_distilled_checkpoint_path),
+                "outputs": str(_metrics_dir / "distilled_eval_outputs.csv"),
+                "metrics": str(_metrics_dir / "distilled_eval_metrics.csv"),
+            }
+
+    mo.md(f"**Distilled evaluation:** `{distilled_eval_report['status']}`")
+    distilled_metric_frame if distilled_metric_frame is not None else distilled_eval_report
+    return (distilled_metric_frame,)
+
+
+@app.cell(hide_code=True)
+def improvement_dashboard(
+    cloud_flores10_score_frame,
+    distilled_metric_frame,
+    mo,
+    pd,
+):
+    improvement_dashboard_view = None
+
+    if pd is None:
+        improvement_dashboard_view = mo.md("pandas is required for the improvement dashboard.")
+    else:
+        _parts = [mo.md("## Improvement Dashboard")]
+        _parts.append(
+            mo.md(
+                """
+                The fixed 10-row FLORES+ cloud sanity check establishes the starting gap:
+                `base_best` is weak on this sample, while Sarvam is a qualified teacher.
+                The distilled checkpoint row appears after running post-distillation
+                evaluation, using the same cache as the baseline and teacher outputs.
+                """
+            )
+        )
+        if cloud_flores10_score_frame is not None:
+            _cloud = cloud_flores10_score_frame.copy()
+            _base = _cloud[_cloud["model"].eq("base_best")]
+            if len(_base) == 1:
+                _cloud["delta_bleu_vs_base"] = _cloud["bleu"] - float(_base["bleu"].iloc[0])
+                _cloud["delta_chrf_vs_base"] = _cloud["chrf"] - float(_base["chrf"].iloc[0])
+            _parts.extend([mo.md("### Recorded FLORES+ 10-row cloud result"), _cloud])
+        if distilled_metric_frame is not None:
+            _parts.extend([mo.md("### Current post-distillation evaluation"), distilled_metric_frame])
+        else:
+            _parts.append(mo.md("Run **Evaluate distilled checkpoint** after training to add the distilled-student row."))
+        improvement_dashboard_view = mo.vstack(_parts)
+
+    improvement_dashboard_view
     return
 
 
