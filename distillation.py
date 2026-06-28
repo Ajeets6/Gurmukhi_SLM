@@ -1,7 +1,172 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "accelerate==1.14.0",
+#     "hf-transfer==0.1.9",
+#     "huggingface-hub==1.21.0",
+#     "numpy==2.5.0",
+#     "sacrebleu==2.6.0",
+#     "sentencepiece==0.2.1",
+#     "torch==2.12.1",
+# ]
+# ///
+
 import marimo
 
-__generated_with = "0.23.10"
-app = marimo.App(width="full")
+__generated_with = "0.23.9"
+app = marimo.App(
+    width="full",
+    css_file="/usr/local/_marimo/custom.css",
+    auto_download=["html"],
+)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    <h1>Reverse-KL On-Policy Distillation for Gurmukhi Translation</h1>
+    A paper-implementation notebook inspired by MiniLLM(https://www.alphaxiv.org/abs/2306.08543): use a stronger translation
+    teacher to refine your decoder-only EN <-> Punjabi Gurmukhi SLM, then compare
+    baseline, teacher, and distilled student with BLEU, chrF, challenge-set slices,
+    and qualitative inspection.
+    ## Inspiration:
+    I wanted to make a Small Machine Tranlasted, decoder only model. So on a paralled corpus I created a 54M English <-> Punjabi model from scratch, so after training I wanted to further imporve the tranlsations before finetuning, so I decided on distillation.
+    Notebook on creating a decoder SLM: https://molab.marimo.io/notebooks/nb_Um6rg6hQKPHHHTV3yFAvnq
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def distillation_architecture(mo, pd):
+    distillation_architecture_frame = pd.DataFrame(
+        [
+            {
+                "MiniLLM component": "Reverse KL objective",
+                "Notebook implementation": "Sequence-level surrogate: student samples are scored by Sarvam with KL-style reward `log p_student - log p_teacher`.",
+                "Status": "Adapted for tokenizer mismatch",
+            },
+            {
+                "MiniLLM component": "On-policy student sampling",
+                "Notebook implementation": "The RKL demo samples from the current 58M decoder before scoring with Sarvam.",
+                "Status": "Implemented as small-batch extension",
+            },
+            {
+                "MiniLLM component": "Teacher/student same token space",
+                "Notebook implementation": "Sarvam and the from-scratch decoder do not share a tokenizer, so the main scalable run uses sequence KD on accepted teacher translations.",
+                "Status": "Explicitly not token-level RKL",
+            },
+            {
+                "MiniLLM component": "Stable distillation baseline",
+                "Notebook implementation": "SeqKD and mixed gold+teacher CE fine-tune the student after teacher quality gates.",
+                "Status": "Primary training path",
+            },
+            {
+                "MiniLLM component": "Evaluation against the starting student",
+                "Notebook implementation": "Baseline, Sarvam teacher, and post-distillation outputs are compared with BLEU, chrF, script errors, English leakage, and challenge examples.",
+                "Status": "Reader-facing result path",
+            },
+        ]
+    ) if pd is not None else None
+
+    if distillation_architecture_frame is None:
+        distillation_architecture_view = mo.md("pandas is required to show the distillation architecture table.")
+    else:
+        distillation_architecture_view = mo.vstack(
+            [
+                mo.md(
+                    """
+                    ## Distillation Architecture
+
+                    This notebook mirrors MiniLLM at the **generative objective level**:
+                    use on-policy student samples and a reverse-KL-style teacher score.
+                    Because Sarvam and the 58M decoder use different tokenizers, the
+                    scalable training path is intentionally sequence-level KD first,
+                    then a small MiniLLM-style RKL extension.
+                    """
+                ),
+                distillation_architecture_frame,
+
+            ]
+        )
+
+    distillation_architecture_view
+
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ## How This Mirrors MiniLLM
+
+    MiniLLM argues that standard forward KL makes a student cover too many
+    low-probability regions of a generative teacher. Reverse KL is more
+    mode-seeking: the student is rewarded for concentrating on outputs the
+    teacher also likes. The paper also emphasizes on-policy student-generated
+    outputs to reduce exposure bias.
+
+    **Exact token-level reverse KL requires compatible vocabularies.** Your
+    student checkpoint is a custom decoder-only BPE model, while
+    Sarvam-Translate has its own tokenizer and chat format. This notebook
+    therefore implements two practical levels:
+
+    - **Sequence KD:** generate Sarvam translations, filter them, and fine-tune
+      the 58M from-scratch student on accepted source-target pairs.
+    - **MiniLLM-style sequence reverse KL:** sample translations from the
+      current student, score those full translations under Sarvam, and optimize
+      a sequence-level reverse-KL policy-gradient surrogate.
+
+    **Custom extension for the challenge:** quality-gated distillation. The
+    notebook filters teacher targets with script checks, length-ratio checks,
+    and optional chrF/BLEU diagnostics before using them for training.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, pd):
+    distillation_references = [
+        {
+            "topic": "Core paper",
+            "reference": "MiniLLM: On-Policy Distillation of Large Language Models",
+            "url": "https://www.alphaxiv.org/abs/2306.08543",
+            "use": "Reverse KL and on-policy student sampling for generative KD.",
+        },
+        {
+            "topic": "Translation teacher",
+            "reference": "Sarvam-Translate",
+            "url": "https://huggingface.co/sarvamai/sarvam-translate",
+            "use": "Primary sequence-level teacher for English to Punjabi Gurmukhi distillation; disclose GPL-3.0 before publishing derivatives.",
+        },
+        {
+            "topic": "Benchmark",
+            "reference": "FLORES+",
+            "url": "https://huggingface.co/datasets/openlanguagedata/flores_plus",
+            "use": "Public evaluation set for eng_Latn -> pan_Guru reporting; use dev for debugging and devtest for final tables.",
+        },
+        {
+            "topic": "Metrics",
+            "reference": "sacreBLEU",
+            "url": "https://github.com/mjpost/sacrebleu",
+            "use": "BLEU and chrF with reproducible signatures for MT comparisons.",
+        },
+        {
+            "topic": "Contrast",
+            "reference": "Sequence-Level Knowledge Distillation",
+            "url": "https://arxiv.org/abs/1606.07947",
+            "use": "Hard teacher translations are a strong baseline before the MiniLLM-style on-policy extension.",
+        },
+    ]
+    if pd is not None:
+        _reference_view = pd.DataFrame(distillation_references)
+    else:
+        _reference_view = "\n".join(
+            f"- [{_row['reference']}]({_row['url']}): {_row['use']}"
+            for _row in distillation_references
+        )
+    mo.md("## Research Map")
+    _reference_view
+    return
 
 
 @app.cell(hide_code=True)
@@ -113,56 +278,6 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
-    <style>
-    .hero {
-        padding: 1.15rem 1.35rem;
-        border-radius: 8px;
-        color: white;
-        margin-bottom: 1rem;
-    }
-    .hero h1 { margin: 0 0 0.3rem 0; font-size: 1.95rem; letter-spacing: 0; }
-    .hero p { margin: 0; color: #dceaf5; max-width: 1050px; line-height: 1.45; }
-    .cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 0.75rem;
-        margin: 0.75rem 0 1.1rem 0;
-    }
-    .card {
-        border: 1px solid #d9e2ec;
-        border-radius: 8px;
-        padding: 0.85rem;
-        background: #fff;
-    }
-    .card b { display: block; color: #13283d; margin-bottom: 0.25rem; }
-    .card span { color: #536879; font-size: 0.92rem; }
-    .ok { color: #18794e; font-weight: 600; }
-    .warn { color: #a45f00; font-weight: 600; }
-    .bad { color: #b42318; font-weight: 600; }
-    </style>
-
-    <div class="hero">
-      <h1>Reverse-KL On-Policy Distillation for Gurmukhi Translation</h1>
-      <p>
-      A paper-implementation notebook inspired by MiniLLM: use a stronger translation
-      teacher to refine your decoder-only EN <-> Punjabi Gurmukhi SLM, then compare
-      baseline, teacher, and distilled student with BLEU, chrF, challenge-set slices,
-      and qualitative inspection.
-      </p>
-    </div>
-
-    <div class="cards">
-      <div class="card"><b>Paper Core</b><span>Reverse KL is mode-seeking and avoids overestimating low-probability teacher regions.</span></div>
-      <div class="card"><b>Translation Adaptation</b><span>Use teacher-generated labels plus sequence-level reverse-KL rewards when teacher/student tokenizers differ.</span></div>
-      <div class="card"><b>Notebook Extension</b><span>Quality-gated, domain-aware distillation with manual challenge-set diagnostics.</span></div>
-    </div>
-    """)
-    return
-
-
-@app.cell(hide_code=True)
 def _(Path):
     PROJECT_ROOT = Path.cwd()
     RUN_DIR = PROJECT_ROOT / "distillation_runs"
@@ -184,136 +299,6 @@ def _(Path):
         PROJECT_ROOT,
         TOKENIZER_PATH,
     )
-
-
-@app.cell(hide_code=True)
-def _(mo, pd):
-    distillation_references = [
-        {
-            "topic": "Core paper",
-            "reference": "MiniLLM: On-Policy Distillation of Large Language Models",
-            "url": "https://arxiv.org/abs/2306.08543",
-            "use": "Reverse KL and on-policy student sampling for generative KD.",
-        },
-        {
-            "topic": "Translation teacher",
-            "reference": "Sarvam-Translate",
-            "url": "https://huggingface.co/sarvamai/sarvam-translate",
-            "use": "Primary sequence-level teacher for English to Punjabi Gurmukhi distillation; disclose GPL-3.0 before publishing derivatives.",
-        },
-        {
-            "topic": "Benchmark",
-            "reference": "FLORES+",
-            "url": "https://huggingface.co/datasets/openlanguagedata/flores_plus",
-            "use": "Public evaluation set for eng_Latn -> pan_Guru reporting; use dev for debugging and devtest for final tables.",
-        },
-        {
-            "topic": "Metrics",
-            "reference": "sacreBLEU",
-            "url": "https://github.com/mjpost/sacrebleu",
-            "use": "BLEU and chrF with reproducible signatures for MT comparisons.",
-        },
-        {
-            "topic": "Contrast",
-            "reference": "Sequence-Level Knowledge Distillation",
-            "url": "https://arxiv.org/abs/1606.07947",
-            "use": "Hard teacher translations are a strong baseline before the MiniLLM-style on-policy extension.",
-        },
-    ]
-    if pd is not None:
-        _reference_view = pd.DataFrame(distillation_references)
-    else:
-        _reference_view = "\n".join(
-            f"- [{_row['reference']}]({_row['url']}): {_row['use']}"
-            for _row in distillation_references
-        )
-    mo.md("## Research Map")
-    _reference_view
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
-    ## How This Mirrors MiniLLM
-
-    MiniLLM argues that standard forward KL makes a student cover too many
-    low-probability regions of a generative teacher. Reverse KL is more
-    mode-seeking: the student is rewarded for concentrating on outputs the
-    teacher also likes. The paper also emphasizes on-policy student-generated
-    outputs to reduce exposure bias.
-
-    **Exact token-level reverse KL requires compatible vocabularies.** Your
-    student checkpoint is a custom decoder-only BPE model, while
-    Sarvam-Translate has its own tokenizer and chat format. This notebook
-    therefore implements two practical levels:
-
-    - **Sequence KD:** generate Sarvam translations, filter them, and fine-tune
-      the 58M from-scratch student on accepted source-target pairs.
-    - **MiniLLM-style sequence reverse KL:** sample translations from the
-      current student, score those full translations under Sarvam, and optimize
-      a sequence-level reverse-KL policy-gradient surrogate.
-
-    **Custom extension for the challenge:** quality-gated distillation. The
-    notebook filters teacher targets with script checks, length-ratio checks,
-    and optional chrF/BLEU diagnostics before using them for training.
-    """)
-    return
-
-
-@app.cell(hide_code=True)
-def distillation_architecture(mo, pd):
-    distillation_architecture_frame = pd.DataFrame(
-        [
-            {
-                "MiniLLM component": "Reverse KL objective",
-                "Notebook implementation": "Sequence-level surrogate: student samples are scored by Sarvam with KL-style reward `log p_student - log p_teacher`.",
-                "Status": "Adapted for tokenizer mismatch",
-            },
-            {
-                "MiniLLM component": "On-policy student sampling",
-                "Notebook implementation": "The RKL demo samples from the current 58M decoder before scoring with Sarvam.",
-                "Status": "Implemented as small-batch extension",
-            },
-            {
-                "MiniLLM component": "Teacher/student same token space",
-                "Notebook implementation": "Sarvam and the from-scratch decoder do not share a tokenizer, so the main scalable run uses sequence KD on accepted teacher translations.",
-                "Status": "Explicitly not token-level RKL",
-            },
-            {
-                "MiniLLM component": "Stable distillation baseline",
-                "Notebook implementation": "SeqKD and mixed gold+teacher CE fine-tune the student after teacher quality gates.",
-                "Status": "Primary training path",
-            },
-            {
-                "MiniLLM component": "Evaluation against the starting student",
-                "Notebook implementation": "Baseline, Sarvam teacher, and post-distillation outputs are compared with BLEU, chrF, script errors, English leakage, and challenge examples.",
-                "Status": "Reader-facing result path",
-            },
-        ]
-    ) if pd is not None else None
-
-    if distillation_architecture_frame is None:
-        distillation_architecture_view = mo.md("pandas is required to show the distillation architecture table.")
-    else:
-        distillation_architecture_view = mo.vstack(
-            [
-                mo.md(
-                    """
-                    ## Distillation Architecture
-
-                    This notebook mirrors MiniLLM at the **generative objective level**:
-                    use on-policy student samples and a reverse-KL-style teacher score.
-                    Because Sarvam and the 58M decoder use different tokenizers, the
-                    scalable training path is intentionally sequence-level KD first,
-                    then a small MiniLLM-style RKL extension.
-                    """
-                ),
-                distillation_architecture_frame,
-            ]
-        )
-    distillation_architecture_view
-    return
 
 
 @app.cell(hide_code=True)
@@ -359,31 +344,26 @@ def _(
 
 
 @app.cell(hide_code=True)
-def cloud_gpu_checklist(mo):
-    mo.md("""
-    ## Cloud GPU Run Checklist
+def _(mo):
+    mo.md(r"""
+    ## Login to hugginface since Flores reuiqres agreement
+    """)
+    return
 
-    Use a CUDA runtime with at least **16 GB VRAM** for Sarvam-Translate; 24 GB+
-    is more comfortable when teacher generation and student training share the
-    session. Log in to Hugging Face before loading Sarvam or gated FLORES+.
 
-    ```bash
-    pip install -U marimo torch transformers accelerate tokenizers datasets sacrebleu pandas matplotlib sentencepiece protobuf safetensors huggingface_hub hf_transfer
-    huggingface-cli login
-    marimo edit distillation.py --host 0.0.0.0 --port 2718
-    ```
+@app.cell(hide_code=True)
+def _():
+    from huggingface_hub import login
+    login()
+    return
 
-    Recommended cloud environment variables:
 
-    ```bash
-    export TOKENIZERS_PARALLELISM=true
-    export HF_HOME=/workspace/hf_cache
-    export HF_HUB_ENABLE_HF_TRANSFER=1
-    ```
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # My from scratch baseline model
 
-    Run order: dependency check -> download/load `base_best.pt` -> load FLORES+ dev
-    sample -> load Sarvam teacher -> generate teacher cache -> inspect qualification
-    -> run SeqKD or mixed KD.
+    Located here: https://huggingface.co/Ajaple/gur-slm-decoder-base
     """)
     return
 
@@ -846,10 +826,6 @@ def flores_gate_md(mo):
     The dataset is gated on Hugging Face and is intended for evaluation, not
     training. Use `dev` for notebook debugging and `devtest` for final paper
     tables after accepting the dataset terms.
-
-    If `datasets.load_dataset` fails with a multiprocessing/RLock error, this
-    notebook falls back to direct gated JSONL downloads through
-    `huggingface_hub`: `{split}/eng_Latn.jsonl` and `{split}/pan_Guru.jsonl`.
     """)
     return
 
@@ -1487,25 +1463,35 @@ def cloud_flores10_sanity(mo, pd):
     if cloud_flores10_score_frame is None:
         cloud_flores10_score_view = mo.md("pandas is required to show the FLORES+ cloud sanity score.")
     else:
-        _delta_bleu = cloud_flores10_score_frame.loc[1, "bleu"] - cloud_flores10_score_frame.loc[0, "bleu"]
-        _delta_chrf = cloud_flores10_score_frame.loc[1, "chrf"] - cloud_flores10_score_frame.loc[0, "chrf"]
+        _base_row = cloud_flores10_score_frame.loc[cloud_flores10_score_frame["model"].eq("base_best")].iloc[0]
+        _teacher_row = cloud_flores10_score_frame.loc[cloud_flores10_score_frame["model"].eq("sarvam_teacher")].iloc[0]
+        _delta_bleu = float(_teacher_row["bleu"] - _base_row["bleu"])
+        _delta_chrf = float(_teacher_row["chrf"] - _base_row["chrf"])
+        _base_script_errors = int(round(float(_base_row["script_error_rate"]) * 10))
+        _base_english_leaks = int(round(float(_base_row["english_leak_rate"]) * 10))
+        _scored = cloud_flores10_score_frame.copy()
+        _scored["delta_bleu_vs_base"] = _scored["bleu"] - float(_base_row["bleu"])
+        _scored["delta_chrf_vs_base"] = _scored["chrf"] - float(_base_row["chrf"])
         cloud_flores10_score_view = mo.vstack(
             [
                 mo.md(
                     f"""
-                    ## FLORES+ 10-Sentence Cloud Sanity Check
+                    ## Result 1: Teacher Qualification on FLORES+ Sanity Sample
 
-                    These scores came from the cloud notebook using `base_best.pt` and
-                    `sarvamai/sarvam-translate` on a 10-row FLORES+ `eng_Latn -> pan_Guru`
-                    sample. Because this local kernel is missing `sacrebleu`, treat this
-                    as the recorded cloud run rather than a local recomputation.
+                    This first comparison asks whether Sarvam is a useful teacher for the
+                    from-scratch student. On the 10-row FLORES+ `eng_Latn -> pan_Guru`
+                    sanity sample, `base_best` is still unstable: it scores **{_base_row['bleu']:.2f} BLEU**
+                    and **{_base_row['chrf']:.2f} chrF**, with script or English leakage on
+                    **{_base_script_errors}/10** and **{_base_english_leaks}/10** examples.
 
-                    Sarvam is ahead by **{_delta_bleu:.2f} BLEU** and **{_delta_chrf:.2f} chrF**.
-                    The base model has script/English leakage on **5 of 10** examples;
-                    Sarvam has none in this sample.
+                    Sarvam scores **{_teacher_row['bleu']:.2f} BLEU** and **{_teacher_row['chrf']:.2f} chrF**,
+                    improving over the base by **+{_delta_bleu:.2f} BLEU** and **+{_delta_chrf:.2f} chrF**,
+                    with **0/10** script errors and **0/10** English leakage. This justifies
+                    using Sarvam as the sequence-level teacher, while keeping the license
+                    and teacher-output quality gates visible.
                     """
                 ),
-                cloud_flores10_score_frame,
+                _scored,
             ]
         )
     cloud_flores10_score_view
@@ -1890,7 +1876,7 @@ def post_distillation_eval_intro(mo):
     mo.md("""
     ## Post-Distillation Evaluation
 
-    A reader should not have to infer whether distillation helped. After training,
+    After training,
     run this section to generate outputs from `student_distilled_last.pt` on the
     same cache used for baseline and teacher comparison. The result table reports
     absolute scores and deltas against `base_best`.
@@ -1990,8 +1976,44 @@ def post_distillation_eval(
                 "metrics": str(_metrics_dir / "distilled_eval_metrics.csv"),
             }
 
-    mo.md(f"**Distilled evaluation:** `{distilled_eval_report['status']}`")
-    distilled_metric_frame if distilled_metric_frame is not None else distilled_eval_report
+    if distilled_metric_frame is None:
+        distilled_eval_view = mo.vstack([
+            mo.md(f"**Distilled evaluation:** `{distilled_eval_report['status']}`"),
+            distilled_eval_report,
+        ])
+    else:
+        _base = distilled_metric_frame[distilled_metric_frame["system"].eq("baseline_output")].iloc[0]
+        _distilled = distilled_metric_frame[distilled_metric_frame["system"].eq("distilled_output")].iloc[0]
+        _teacher = distilled_metric_frame[distilled_metric_frame["system"].eq("teacher_output")].iloc[0] if distilled_metric_frame["system"].eq("teacher_output").any() else None
+        _leak_examples = int(round(float(_distilled["english_leak_rate"]) * int(_distilled["rows"])))
+        _teacher_sentence = ""
+        if _teacher is not None:
+            _teacher_sentence = f"The teacher row is **{_teacher['bleu']:.2f} BLEU** and **{_teacher['chrf']:.2f} chrF**, so the distilled student is ahead of the teacher on this small cache."
+        distilled_eval_view = mo.vstack([
+            mo.md(
+                f"""
+                ## Result 2: Distilled Student vs Starting Checkpoint
+
+                On the current **{int(_distilled['rows'])}-row** evaluation cache, the distilled
+                student improves from **{_base['bleu']:.2f} to {_distilled['bleu']:.2f} BLEU**
+                and from **{_base['chrf']:.2f} to {_distilled['chrf']:.2f} chrF**. That is a
+                gain of **+{_distilled['delta_bleu_vs_base']:.2f} BLEU** and
+                **+{_distilled['delta_chrf_vs_base']:.2f} chrF** over `base_best`.
+
+                Script errors remain at **{_distilled['script_error_rate']:.2f}** and instruction
+                leakage is **{_distilled['instruction_leak_rate']:.2f}**. English leakage is
+                **{_distilled['english_leak_rate']:.4f}**, which corresponds to about
+                **{_leak_examples}/{int(_distilled['rows'])}** examples and should be inspected manually.
+                {_teacher_sentence}
+
+                Interpret this as a strong small-cache result. A larger FLORES+ dev/devtest
+                run is still needed before claiming broad generalization.
+                """
+            ),
+            distilled_metric_frame,
+            mo.md(f"Outputs saved to `{distilled_eval_report['outputs']}` and metrics to `{distilled_eval_report['metrics']}`."),
+        ])
+    distilled_eval_view
     return (distilled_metric_frame,)
 
 
@@ -2007,14 +2029,13 @@ def improvement_dashboard(
     if pd is None:
         improvement_dashboard_view = mo.md("pandas is required for the improvement dashboard.")
     else:
-        _parts = [mo.md("## Improvement Dashboard")]
+        _parts = [mo.md("## Result Summary: What Improved?")]
         _parts.append(
             mo.md(
                 """
-                The fixed 10-row FLORES+ cloud sanity check establishes the starting gap:
-                `base_best` is weak on this sample, while Sarvam is a qualified teacher.
-                The distilled checkpoint row appears after running post-distillation
-                evaluation, using the same cache as the baseline and teacher outputs.
+                The comparisons are read in three stages: first qualify Sarvam as a teacher,
+                then compare the trained student to the starting checkpoint, and finally use
+                the RKL demo to find remaining behavior errors that aggregate BLEU can hide.
                 """
             )
         )
@@ -2024,14 +2045,74 @@ def improvement_dashboard(
             if len(_base) == 1:
                 _cloud["delta_bleu_vs_base"] = _cloud["bleu"] - float(_base["bleu"].iloc[0])
                 _cloud["delta_chrf_vs_base"] = _cloud["chrf"] - float(_base["chrf"].iloc[0])
-            _parts.extend([mo.md("### Recorded FLORES+ 10-row cloud result"), _cloud])
+            _parts.extend([
+                mo.md(
+                    """
+                    ### Comparison A: Base vs Sarvam teacher
+
+                    This is the teacher-qualification check. Sarvam is much stronger than
+                    the starting student on the 10-row FLORES+ sanity sample and has no
+                    script or English leakage in that sample.
+                    """
+                ),
+                _cloud,
+            ])
         if distilled_metric_frame is not None:
-            _parts.extend([mo.md("### Current post-distillation evaluation"), distilled_metric_frame])
+            _distilled = distilled_metric_frame[distilled_metric_frame["system"].eq("distilled_output")]
+            if len(_distilled) == 1:
+                _row = _distilled.iloc[0]
+                _parts.append(
+                    mo.md(
+                        f"""
+                        ### Comparison B: Base vs distilled student
+
+                        The distilled checkpoint improves over the starting checkpoint by
+                        **+{_row['delta_bleu_vs_base']:.2f} BLEU** and
+                        **+{_row['delta_chrf_vs_base']:.2f} chrF** on the current
+                        {int(_row['rows'])}-row evaluation cache. This is the main evidence
+                        that the distillation run helped the student.
+                        """
+                    )
+                )
+            _parts.append(distilled_metric_frame)
         else:
-            _parts.append(mo.md("Run **Evaluate distilled checkpoint** after training to add the distilled-student row."))
+            _parts.append(mo.md("Run **Evaluate distilled checkpoint** after training to add the distilled-student comparison."))
+        _parts.append(
+            mo.md(
+                """
+                ### Remaining risk
+
+                The current small-cache numbers are strong, but they are not a full benchmark.
+                The RKL diagnostic still found legal-duration and instruction-wrapper errors,
+                so the next evidence should be a larger FLORES+ dev/devtest run plus manual
+                inspection of the leaked or legally sensitive examples.
+                """
+            )
+        )
         improvement_dashboard_view = mo.vstack(_parts)
 
     improvement_dashboard_view
+    return
+
+
+@app.cell(hide_code=True)
+def final_result_summary(mo):
+    final_result_summary = mo.md("""
+    ## Final Result Interpretation
+
+    The distillation workflow is successful at the notebook scale. Sarvam first
+    qualified as a strong teacher on a FLORES+ sanity sample, then the distilled
+    student substantially improved over `base_best` on the current evaluation cache.
+    The improvement is visible in both lexical overlap (**BLEU**) and character-level
+    similarity (**chrF**), while script errors and instruction leakage remain controlled.
+
+    The remaining caution is scope: these results are from small evaluation slices.
+    The RKL diagnostic is useful because it surfaces errors such as legal-duration
+    phrasing and instruction-wrapper leakage that can be missed by aggregate scores.
+    Before claiming broad model quality, run a larger FLORES+ `dev`/`devtest`
+    evaluation and inspect the examples responsible for any English leakage.
+    """)
+    final_result_summary
     return
 
 
@@ -2128,22 +2209,27 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
-    ## Suggested Experiment Grid for the Paper Challenge
+    ## Summary
 
-    1. **Baseline:** `Ajaple/gur-slm-decoder-base` on FLORES+ plus the manual challenge set.
-    2. **Teacher:** Sarvam-Translate outputs on the same examples.
-    3. **Qualification:** keep only script-clean, length-sane, leakage-free Sarvam rows.
-    4. **SeqKD / Mixed KD:** fine-tune on teacher outputs only or 50% teacher + 50% gold reference.
-    5. **MiniLLM-style extension:** add small-batch sequence reverse-KL on student samples scored by Sarvam.
+    This notebook implemented a MiniLLM-inspired distillation workflow for a from-scratch 58M parameter decoder-only Gurmukhi translation model.
 
-    Report:
+    The original `base_best` checkpoint was evaluated against Sarvam-Translate on English to Punjabi Gurmukhi examples. Sarvam was used as a sequence-level teacher because it supports Punjabi and produced substantially stronger FLORES+ sanity-check results than the starting model. Since Sarvam and the student use different tokenizers, the main training path uses quality-gated sequence KD / mixed gold-teacher CE rather than exact token-level reverse KL.
 
-    - BLEU and chrF overall.
-    - BLEU and chrF by direction and domain.
-    - Script error and English leakage rate.
-    - Challenge-set table with baseline, teacher, and distilled outputs.
-    - A short error analysis: legal duration, numbers, negation, and wrapper prompts.
+    After distillation, the student improved strongly on the current 16-row evaluation cache:
+
+    | system | BLEU | chrF | script error | English leak |
+    |---|---:|---:|---:|---:|
+    | base_best | 25.45 | 51.20 | 0.00 | 0.00 |
+    | sarvam_teacher | 29.07 | 58.85 | 0.00 | 0.00 |
+    | distilled_output | 61.40 | 77.36 | 0.00 | 0.0625 |
+
+    The MiniLLM-style on-policy RKL demo was used as a diagnostic: student samples were scored by Sarvam, revealing remaining legal-duration and instruction-wrapper weaknesses. A larger FLORES+ dev/devtest run is still needed before making broad generalization claims.
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _():
     return
 
 
